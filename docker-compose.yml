@@ -2,13 +2,14 @@ version: '2'
 
 services:
   notebook:
-    image: ninai/pipeline
+    build: .
     ports:
       - "8888:8888"
     volumes:
       - /mnt/:/mnt/
       - /home/pipeline_data/:/tmp/
-      - .:/data/pipeline/
+      - ./notebooks:/notebooks
+      # - /home/zhiwei/Documents/pipeline/notebooks:/notebooks
     env_file: .env
     environment:
       - DISPLAY=$DISPLAY
@@ -19,7 +20,7 @@ services:
       - --allow-root
       - --NotebookApp.token=''
       - --no-browser 
-
+      - --NotebookApp.notebook_dir=/notebooks
 
   minion:
     image: ninai/stimulus-pipeline
@@ -34,7 +35,7 @@ services:
 
   
   bash:
-    image: ninai/stimulus-pipeline
+    image: ninai/pipeline
     volumes:
       - /mnt/:/mnt/
       - /home/pipeline_data/:/tmp/

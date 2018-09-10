@@ -12,5 +12,6 @@ RUN git clone https://github.com/atlab/commons.git && \
 # Install pipeline
 COPY . /data/pipeline
 RUN pip3 install -e pipeline/python/
-
+RUN apt-get install -y graphviz
+RUN apt-get install -y graphviz-dev
 ENTRYPOINT ["/bin/bash"]
