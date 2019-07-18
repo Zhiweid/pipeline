@@ -22,6 +22,7 @@ import json
 import pandas as pd
 import numpy as np
 import cv2
+import shutil
 from tqdm import tqdm
 
 from scipy.misc import imresize
@@ -60,7 +61,7 @@ class Eye(dj.Imported):
     def key_source(self):
         return experiment.Scan() & experiment.Scan.EyeVideo().proj()
 
-    def _make_tuples(self, key):
+    def make(self, key):
         # Get behavior filename
         behavior_path = (experiment.Session() & key).fetch1('behavior_path')
         local_path = lab.Paths().get_local_path(behavior_path)
@@ -244,7 +245,7 @@ class TrackedVideo(dj.Computed):
 
     key_source = Eye() * TrackingTask() - TrackingTask.Ignore()
 
-    def _make_tuples(self, key):
+    def make(self, key):
         print("Populating", key)
         param = DEFAULT_PARAMETERS
         if TrackingTask.ManualParameters() & key:
@@ -422,89 +423,14 @@ class ManuallyTrackedContours(dj.Manual, AutoPopulate):
         """
 
     def make(self, key, backup_file=None):
-        print("Populating", key)
+        
+        msg = """
+        ManuallyTrackedContours table is now deprecated! 
+        If you wanna track manually, please use Tracking.ManualTracking table:
+        pupil.Tracking.populate(key, 'tracking_method=1')
+        """
 
-        if backup_file is None:
-            avi_path = (Eye() & key).get_video_path()
-            tracker = ManualTracker(avi_path)
-            tracker.backup_file = '/tmp/tracker_state{animal_id}-{session}-{scan_idx}.pkl'.format(
-                **key)
-        else:
-            tracker = ManualTracker.from_backup(backup_file)
-
-        try:
-            tracker.run()
-        except:
-            tracker.backup()
-            raise
-
-        logtrace = tracker.mixing_constant.logtrace.astype(float)
-        self.insert1(dict(key, min_lambda=logtrace[logtrace > 0].min()))
-        self.log_git(key)
-        frame = self.Frame()
-        parameters = self.Parameter()
-        for frame_id, ok, contour, params in tqdm(zip(count(), tracker.contours_detected, tracker.contours,
-                                                      tracker.parameter_iter()),
-                                                  total=len(tracker.contours)):
-            assert frame_id == params['frame_id']
-            if ok:
-                frame.insert1(dict(key, frame_id=frame_id, contour=contour))
-            else:
-                frame.insert1(dict(key, frame_id=frame_id))
-            parameters.insert1(dict(key, **params), ignore_extra_fields=True)
-
-    def warm_start(self, key, backup_file):
-        assert not key in self, '{} should not be in the table already!'
-        with self.connection.transaction:
-            self.make(key, backup_file)
-
-    def update(self, key):
-        print("Populating", key)
-
-        avi_path = (Eye() & key).get_video_path()
-
-        tracker = ManualTracker(avi_path)
-        contours = (self.Frame() & key).fetch('contour', order_by='frame_id')
-        tracker.contours = np.array(contours)
-        tracker.contours_detected = np.array([e is not None for e in contours])
-        tracker.backup_file = '/tmp/tracker_update_state{animal_id}-{session}-{scan_idx}.pkl'.format(
-            **key)
-
-        try:
-            tracker.run()
-        except Exception as e:
-            print(str(e))
-            answer = input(
-                'Tracker crashed. Do you want to save the content anyway [y/n]?').lower()
-            while answer not in ['y', 'n']:
-                answer = input(
-                    'Tracker crashed. Do you want to save the content anyway [y/n]?').lower()
-            if answer == 'n':
-                raise
-        if input('Do you want to delete and replace the existing entries? Type "YES" for acknowledgement.') == "YES":
-            with dj.config(safemode=False):
-                with self.connection.transaction:
-                    (self & key).delete()
-
-                    logtrace = tracker.mixing_constant.logtrace.astype(float)
-                    self.insert1(
-                        dict(key, min_lambda=logtrace[logtrace > 0].min()))
-                    self.log_key(key)
-
-                    frame = self.Frame()
-                    parameters = self.Parameter()
-                    for frame_id, ok, contour, params in tqdm(zip(count(), tracker.contours_detected, tracker.contours,
-                                                                  tracker.parameter_iter()),
-                                                              total=len(tracker.contours)):
-                        assert frame_id == params['frame_id']
-                        if ok:
-                            frame.insert1(
-                                dict(key, frame_id=frame_id, contour=contour))
-                        else:
-                            frame.insert1(dict(key, frame_id=frame_id))
-                        parameters.insert1(
-                            dict(key, **params), ignore_extra_fields=True)
-
+        print(msg)
 
 @schema
 class FittedContour(dj.Computed):
@@ -595,6 +521,19 @@ class Tracking(dj.Computed):
     tracking_ts=CURRENT_TIMESTAMP   : timestamp  # automatic
     """
 
+    class ManualTrackingParameter(dj.Part):
+        definition="""
+        -> master.ManualTracking
+        ---
+        min_lambda=NULL         : float     # minimum mixing weight for current frame in running average computation (1 means no running avg was used)
+        roi=NULL                : longblob  # roi of eye
+        gauss_blur=NULL         : float     # bluring of ROI
+        exponent=NULL           : tinyint   # exponent for contrast enhancement
+        dilation_iter=NULL      : tinyint   # number of dilation and erosion operations
+        min_contour_len=NULL    : tinyint   # minimal contour length
+        running_avg_mix=NULL    : float     # weight a in a * current_frame + (1-a) * running_avg
+        """
+
     class ManualTracking(dj.Part):
         definition="""
         -> master
@@ -602,20 +541,56 @@ class Tracking(dj.Computed):
         ---
         contour=NULL                : longblob              # eye contour relative to ROI
         """
-        def make(self, key):
-            print("""
-            This method is deprecated!
-            Simply re-inserting data that were manually tracked before (ManuallyTrackedContours)!
-            If data that matches with key does not exist, it will not be stored!
-            """)
+        def make(self, key, backup_file=None):
+            
+            # key does exist in ManuallyTrackedContours (i.e. we tracked before)
+            if len(ManuallyTrackedContours() & key) > 0:
 
-            if (ManuallyTrackedContours() & key).fetch1() is not None:
-                for frame_id in range((ManuallyTrackedContours.Frame & key).fetch('frame_id').max()):
-                    ckey = (ManuallyTrackedContours.Frame & dict(key, frame_id=frame_id)).fetch1()
-                    self.insert1(dict(ckey, tracking_method= key['tracking_method']))
+                print("""
+                The given key has been tracked manually before (from ManuallyTrackedContours)! 
+                Simply re-inserting previously tracked data here!
+                """)
+                for frame_id in range(len(ManuallyTrackedContours.Frame & key)):
+                    # copy Frame info
+                    frame_key = (ManuallyTrackedContours.Frame & dict(key, frame_id=frame_id)).fetch1()
+                    self.insert1(dict(frame_key, tracking_method= key['tracking_method']))
+                    # copy Parameter info
+                    param_key = (ManuallyTrackedContours.Parameter & dict(key, frame_id=frame_id)).fetch1()
+                    min_lambda = (ManuallyTrackedContours & key).fetch1('min_lambda')
+                    Tracking.ManualTrackingParameter.insert1(
+                        dict(param_key, min_lambda=min_lambda, tracking_method= key['tracking_method']))
+            
+            # key does not exist in ManuallyTrackedContours, hence need to trace manually
             else:
-                print("Given key does not exist in ManuallyTrackedContours table!")
-                print("Either manually track by populating ManuallyTrackedContours or use deeplabcut method!")
+                print("Manually Tracking!")
+            
+                if backup_file is None:
+                    avi_path = (Eye() & key).get_video_path()
+                    tracker = ManualTracker(avi_path)
+                    tracker.backup_file = '/tmp/tracker_state{animal_id}-{session}-{scan_idx}.pkl'.format(
+                        **key)
+                else:
+                    tracker = ManualTracker.from_backup(backup_file)
+
+                try:
+                    tracker.run()
+                except:
+                    tracker.backup()
+                    raise
+
+                logtrace = tracker.mixing_constant.logtrace.astype(float)
+                min_lambda = min_lambda=logtrace[logtrace > 0].min()
+                frame = Tracking.ManualTracking()
+                parameters = Tracking.ManualTrackingParameter()
+                for frame_id, ok, contour, params in tqdm(zip(count(), tracker.contours_detected, tracker.contours,
+                                                            tracker.parameter_iter()),
+                                                        total=len(tracker.contours)):
+                    assert frame_id == params['frame_id']
+                    if ok:
+                        frame.insert1(dict(key, frame_id=frame_id, contour=contour))
+                    else:
+                        frame.insert1(dict(key, frame_id=frame_id))
+                    parameters.insert1(dict(key, **params, min_lambda=min_lambda), ignore_extra_fields=True)
 
     class Deeplabcut(dj.Part):
         definition="""
@@ -724,6 +699,10 @@ class Tracking(dj.Computed):
             short_video_path, original_width, original_height, mid_frame_num = DLC_tools.make_short_video(
                 tracking_dir)
 
+            # add original width and height to config
+            config['original_width'] = original_width
+            config['original_height'] = original_height
+
             # save info about short video
             key['short_vid_starting_index'] = mid_frame_num
             
@@ -757,6 +736,12 @@ class Tracking(dj.Computed):
                             added_pixels=pixel_num)
 
             self.insert1(key)
+
+            # delete short video directory 
+            shutil.rmtree(os.path.dirname(short_video_path))
+
+            # delete compressed and cropped video 
+            os.remove(compressed_cropped_video_path)
 
     def make(self, key):
         print("Tracking for case {}".format(key))
@@ -804,63 +789,114 @@ class FittedPupil(dj.Computed):
         visible_portion=NULL     : float         # portion of visible pupil area given a fitted ellipse frame. Please refer DLC_tools.PupilFitting.detect_visible_pupil_area for more details
         """
 
+    def filter_by_std(self, data, fitting_method, std_magnitude=5.5):
+        """Filter out outliers based on std specified by user. The outliers are replaced by np.nan
+
+        Args:
+            data (list): An nframes long list with each element containing each frame's fitting info
+            fitting_method (str): A string specifying which fitting method used. Must be either a circle or an ellipse
+            std_magnitude (float): A number that specifies how many std away from mean to be used as a cutoff.
+                Default to 5.5 (emperically obtained value)
+    
+        Returns:
+            data_circle (list): An nframes long list with each element containing each frame's circle fitting info 
+                after filtering by std
+            data_ellipse (list): An nframes long list with each element containing each frame's ellipse fitting info
+                after filtering by std
+
+        """
+        if fitting_method.lower() == 'circle':
+            # filter out circles
+            data = np.array(data)
+            center, radius = data[:,5], data[:,6].astype(np.float64)
+
+            detectedFrames = ~np.isnan(radius)
+            xy = np.full((len(radius), 2), np.nan)
+            xy[detectedFrames, :] = np.vstack(center[detectedFrames])
+
+            x = xy[:,0]
+            y = xy[:,1]
+            
+            rejected_radius_ind = np.greater(abs(radius - np.nanmean(radius)), std_magnitude * np.nanstd(radius), where=~np.isnan(radius))
+            rejected_x_ind = np.greater(abs(x - np.nanmean(x)), std_magnitude * np.nanstd(x), where=~np.isnan(x))
+            rejected_y_ind = np.greater(abs(y - np.nanmean(y)), std_magnitude * np.nanstd(y), where=~np.isnan(y))
+            
+            rejected_ind = np.logical_or(np.logical_or(rejected_radius_ind, rejected_x_ind), rejected_y_ind)
+
+            # reject the outlier indices
+            data[rejected_ind,5:] = None, None, -3.0
+        
+        elif fitting_method.lower() == 'ellipse':
+
+            # filter out ellipses
+            data = np.array(data)
+            center, major_r, minor_r = data[:,5], data[:,6].astype(np.float64), data[:,7].astype(np.float64)
+
+            detectedFrames = ~np.isnan(major_r)
+            xy = np.full((len(major_r), 2), np.nan)
+            xy[detectedFrames, :] = np.vstack(center[detectedFrames])
+
+            x = xy[:,0]
+            y = xy[:,1]
+            
+            rejected_major_r_ind = np.greater(abs(major_r - np.nanmean(major_r)), std_magnitude * np.nanstd(major_r), where=~np.isnan(major_r))
+            rejected_minor_r_ind = np.greater(abs(minor_r - np.nanmean(minor_r)), std_magnitude * np.nanstd(minor_r), where=~np.isnan(minor_r))
+            rejected_x_ind = np.greater(abs(x - np.nanmean(x)), std_magnitude * np.nanstd(x), where=~np.isnan(x))
+            rejected_y_ind = np.greater(abs(y - np.nanmean(y)), std_magnitude * np.nanstd(y), where=~np.isnan(y))
+
+            rejected_ind = np.logical_or(np.logical_or(np.logical_or(rejected_major_r_ind, rejected_minor_r_ind), rejected_x_ind), rejected_y_ind)
+
+            # reject the outlier indices
+            data[rejected_ind,5:] = None, None, None, None, -3.0
+
+        return data.tolist()
+
+
     def make(self, key):
         print("Fitting:", key)
 
         self.insert1(key)
 
+        common_entry = [key['animal_id'], key['session'], key['scan_idx'], key['tracking_method']]
+
+        avi_path = (Eye & key).get_video_path()
+        nframes = (Eye & key).fetch1('total_frames')
+
+        data_circle = []
+        data_ellipse = []
+
         # manual == 1
         if key['tracking_method'] == 1:
 
-            avi_path = (Eye & key).get_video_path()
-
             contours = (Tracking.ManualTracking & key).fetch(
-                order_by='frame_id ASC', as_dict=True)
+                'contour', order_by='frame_id ASC')
             
-            video = DLC_tools.video_processor.VideoProcessorCV(fname=avi_path)
-
             # for manual tracking, we did not track eyelids, hence put -1.0 to be 
             # consistent with how we defined under PupilFitting.detect_visible_pupil_area
             visible_portion = -1.0 
-            for frame_num in tdqm(range(video.nframes)):
-                ckey = contours[frame_num]
 
-                if ckey['contour'] is not None:
+            for frame_num in tqdm(range(nframes)):
 
-                    # fit circle. This is consistent with fitting method for DLC
-                    if len(ckey['contour']) >= 3:
-                        x, y, radius = DLC_tools.smallest_enclosing_circle_naive(ckey['contour'])
-                        center = (x, y)
-                        self.Circle().insert1(dict(key, frame_id=frame_num,
-                                                   center=center,
-                                                   radius=radius,
-                                                   visible_portion=visible_portion))
-                    else:
-                        # if less than 3, then we do not have enough pupil labels nor
-                        # we have eyelid labels
-                        self.Circle().insert1(dict(key, frame_id=frame_num,
-                                                   center=None,
-                                                   radius=None,
-                                                   visible_portion=-3.0))   
+                if contours[frame_num] is None or len(contours[frame_num].squeeze()) < 3:
+                                        
+                    data_circle.append([*common_entry, frame_num, None, None, -3.0])
+                
+                if contours[frame_num] is None or len(contours[frame_num].squeeze()) < 6:
+                    
+                    data_ellipse.append([*common_entry, frame_num, None, None, None, None, -3.0])
 
-                    # fit ellipse. This is consistent with fitting method for DLC
-                    if len(ckey['contour']) >= 6:
-                        rotated_rect = cv2.fitEllipse(ckey['contour'])
-                        self.Ellipse().insert1(dict(key, frame_id=frame_num,
-                                            center=rotated_rect[0],
-                                            major_radius=rotated_rect[1][1]/2.0,
-                                            minor_radius=rotated_rect[1][0]/2.0,
-                                            rotation_angle=rotated_rect[2],
-                                            visible_portion=visible_portion))
-                    else:
-                        # if less than 3, then we do not have enough pupil labels nor
-                        # we have eyelid labels
-                        self.Ellipse().insert1(dict(key, frame_id=frame_num, 
-                                            center=None,
-                                            major_radius=None,
-                                            minor_radius=None,
-                                            rotation_angle=None,
-                                            visible_portion=-3.0))
+                if contours[frame_num] is not None and len(contours[frame_num].squeeze()) >= 3:
+                    x, y, radius = DLC_tools.smallest_enclosing_circle_naive(contours[frame_num].squeeze())
+                    center = np.array(x, y)
+
+                    data_circle.append([*common_entry, frame_num, center, radius, visible_portion])
+                
+                if contours[frame_num] is not None and len(contours[frame_num]) >= 6:
+                        rotated_rect = cv2.fitEllipse(contours[frame_num].squeeze())
+    
+                        data_ellipse.append([*common_entry, frame_num, rotated_rect[0], 
+                                            rotated_rect[1][1]/2.0, rotated_rect[1][0]/2.0, 
+                                            rotated_rect[2], visible_portion])
 
         # deeplabcut 2
         elif key['tracking_method'] == 2:
@@ -872,31 +908,201 @@ class FittedPupil(dj.Computed):
             config['shuffle'] = dlc_config['shuffle']
             config['trainingsetindex'] = dlc_config['trainingsetindex']
 
-            # find path to compressed_cropped_video
-            base_path = os.path.splitext((Eye() & key).get_video_path())[0] + '_tracking'
-            
-            for root, _, files in os.walk(base_path):
-                for file in files:
-                    if file.endswith('compressed_cropped.avi'):
-                        cc_vid_path = os.path.join(root, file)
+            # find path to original video symlink
+            base_path = os.path.splitext(avi_path)[0] + '_tracking'
+            video_path = os.path.join(base_path, os.path.basename(avi_path))
 
-            config['video_path'] = cc_vid_path
+            config['orig_video_path'] = video_path
 
-            pupil_fit = DLC_tools.PupilFitting(config=config, bodyparts='all')
+            # find croppoing coords
+            cropped_coords = (Tracking.Deeplabcut & key).fetch1('cropped_x0','cropped_x1','cropped_y0','cropped_y1')
 
-            for frame_num in tqdm(range(pupil_fit.clip.nframes)):
+            config['cropped_coords'] = cropped_coords
+
+            pupil_fit = DLC_tools.PupilFitting(config=config, bodyparts='all', cropped=True)
+
+            for frame_num in tqdm(range(nframes)):
 
                 fit_dict = pupil_fit.fitted_core(frame_num=frame_num)
 
-                self.Circle.insert1(dict(key, frame_id=frame_num,
-                                    center=fit_dict['circle_fit']['center'],
-                                    radius=fit_dict['circle_fit']['radius'],
-                                    visible_portion=fit_dict['circle_visible']['visible_portion']))
+                # circle info
+                center=fit_dict['circle_fit']['center']
+                radius=fit_dict['circle_fit']['radius']
+                visible_portion=fit_dict['circle_visible']['visible_portion']
 
-                self.Ellipse.insert1(dict(key, frame_id=frame_num,
-                                    center=fit_dict['ellipse_fit']['center'],
-                                    major_radius=fit_dict['ellipse_fit']['major_radius'],
-                                    minor_radius=fit_dict['ellipse_fit']['minor_radius'],
-                                    rotation_angle=fit_dict['ellipse_fit']['rotation_angle'],
-                                    visible_portion=fit_dict['ellipse_visible']['visible_portion']))
+                data_circle.append([*common_entry, frame_num, center, radius, visible_portion])
+
+                # ellipse info
+                center=fit_dict['ellipse_fit']['center']
+                major_radius=fit_dict['ellipse_fit']['major_radius']
+                minor_radius=fit_dict['ellipse_fit']['minor_radius']
+                rotation_angle=fit_dict['ellipse_fit']['rotation_angle']
+                visible_portion=fit_dict['ellipse_visible']['visible_portion']
+
+                data_ellipse.append([*common_entry, frame_num, center, 
+                                            major_radius, minor_radius, 
+                                            rotation_angle, visible_portion])
+        
+        # now filter out the outliers by 5.5 std away from mean
+        data_circle = self.filter_by_std(data_circle,fitting_method='circle', std_magnitude=5.5)
+        data_ellipse = self.filter_by_std(data_ellipse,fitting_method='ellipse', std_magnitude=5.5)
+
+        # insert data
+        self.Circle.insert(data_circle)
+        self.Ellipse.insert(data_ellipse)
+
+def plot_fitting(key, start, end=-1, fit_type='Circle', fig=None, ax=None, mask_flag=True):
+    """Plot the fitted frame. Note this plotting method only works for Circle, not an ellipse
+
+    Args:
+        key (dict): A dictionary that contains animal_id, session, scan_idx, and tracking_method as keys
+        start (int): A number indicating the start of the frame. 
+            If only start is provided, then plot only one frame.
+        end (int, optional): A number indicating the end of the frame. 
+            If both start and end provided, then plot multiple frames. Otherwise, Default to -1.
+        fit_type (str, optional): A string indicating what to plot. Default to 'Circle'. Other option is 'Ellipse'
+        fig (:obj matplotlib.figure.Figure, optional): Figure object to pass. Default to None.
+        ax (:obj matplotlib.axes._subplots.AxesSubplot, optional): Axes object to pass. Defualt to None.
+        mask_flag (boolean, optional): Whether to show the visible area or not for DLC fitting. 
+            Only relevant if tracking_method is 2. Default to True
+    
+    Returns:
+        fig (:obj matplotlib.figure.Figure, optional): Figure object to pass. if fig provided as an argument,
+            return the same fig object after updating
+        ax (:obj matplotlib.axes._subplots.AxesSubplot, optional): Axes object to pass. if ax provided as an argument,
+            return the same ax object after updating
+    """
+    from IPython import display
+    import pylab as pl
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Ellipse
+    import time
+
+    if 'tracking_method' not in key.keys():
+        raise KeyError('tracking_method is not define!')
+
+    if end == -1:
+        end = start + 1
+
+    fit_type = fit_type.lower()
+    if fit_type not in ['circle', 'ellipse']:
+        raise ValueError('fit_type must be either a circle or an ellipse')
+    
+    # find croppoing coords
+    # It is possible that the provided key was not tracked with DLC. Then cropped_coords is the same size as the original frame size
+    if len(Tracking.Deeplabcut & dict(key, tracking_method=2)) == 0:
+        cropped_coords = (0, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), 0, int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) )
+    elif len(Tracking.Deeplabcut & dict(key, tracking_method=2)) == 1:
+        cropped_coords = (Tracking.Deeplabcut & dict(key, tracking_method=2)).fetch1('cropped_x0','cropped_x1','cropped_y0','cropped_y1')
+    else:
+        raise ValueError('Fitting is corrupted! Ensure that Tracking.Deeplabcut & dict(key, tracking_method=2) is unique!')
+
+    # prepare plotting
+    if ax is None:    
+        fig = plt.figure(frameon=False, figsize=(12,8))
+        ax = fig.add_subplot(1, 1, 1)
+        plt.subplots_adjust(left=0, bottom=0, right=1,
+                            top=1, wspace=0, hspace=0)
+
+    # get video path 
+    avi_path = (Eye & key).get_video_path()
+    cap = cv2.VideoCapture(avi_path)
+
+    plt.xlim(0, cap.get(cv2.CAP_PROP_FRAME_WIDTH) - cropped_coords[0])
+    plt.ylim(0, cap.get(cv2.CAP_PROP_FRAME_HEIGHT) - cropped_coords[2])
+
+    plt.gca().invert_yaxis()
+
+    if key['tracking_method'] == 1:
+
+        if fit_type == 'circle':
+            center, radius = (FittedPupil.Circle() & key & 'frame_id >= {}'.format(start) & 'frame_id < {}'.format(end+1)).fetch(
+                'center','radius',order_by ='frame_id')
+        else:
+            center, major_r, minor_r, angle = (FittedPupil.Ellipse() & key & 'frame_id >= {}'.format(start) & 'frame_id < {}'.format(end+1)).fetch(
+                'center','major_radius', 'minor_radius', 'rotation_angle', order_by ='frame_id')
+        # manual
+        contours = (Tracking.ManualTracking & key & 'frame_id >= {}'.format(start) & 'frame_id < {}'.format(end+1)).fetch(
+            'contour', order_by ='frame_id')
+                
+        for frame_num in range(start, end):
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+            _, img = cap.read()
+            img = np.flip(img, 2)[cropped_coords[2]: cropped_coords[3], cropped_coords[0]: cropped_coords[1]]
+            
+            ax_frame = ax.imshow(img, cmap='gray')
+            
+            if contours[frame_num-start] is not None:
+                ind = frame_num-start
+                
+                if fit_type == 'circle':
+                    
+                    plt_fit = plt.Circle((center[ind][0]-cropped_coords[0], center[ind][1]-cropped_coords[2]), 
+                                        radius[ind], color='b', fill=False)
+
+                else:
+                    plt_fit = Ellipse((center[ind][0]-cropped_coords[0], center[ind][1]-cropped_coords[2]), 
+                                        major_r[ind]*2, minor_r[ind]*2, angle[ind]-90, color='b',fill=False)
+
+                ax.add_patch(plt_fit)
+                ax_scatter = ax.scatter(contours[ind].squeeze()[:,0] - cropped_coords[0], 
+                            contours[ind].squeeze()[:,1] - cropped_coords[2], 
+                            s=4**2, color='red', alpha=.5)
+                # ax.add_collection(ax_scatter)
+
+            ax.axis('off')
+            ax.set_title('frame num: ' + str(frame_num), fontsize=10)
+            plt.tight_layout()
+
+            fig.canvas.draw()
+
+            # check if we plot only a single frame. If so, return fig and ax
+            if end == start + 1:
+                return fig, ax
+
+            display.clear_output(wait=True)
+            display.display(pl.gcf())
+            time.sleep(0.5)
+
+            plt.cla()
+        plt.close('all')
+
+    elif key['tracking_method'] == 2:
+        # deeplabcut
+        dlc_config = (ConfigDeeplabcut & (Tracking.Deeplabcut & key)).fetch1()
+
+        config = auxiliaryfunctions.read_config(dlc_config['config_path'])
+        config['config_path'] = dlc_config['config_path']
+        config['shuffle'] = dlc_config['shuffle']
+        config['trainingsetindex'] = dlc_config['trainingsetindex']
+        config['cropped_coords'] =cropped_coords
+
+        # find path to original video symlink
+        base_path = os.path.splitext(avi_path)[0] + '_tracking'
+        video_path = os.path.join(base_path, os.path.basename((Eye() & key).get_video_path()))
+
+        config['orig_video_path'] = video_path
+        
+        pupil_fit = DLC_tools.PupilFitting(config=config, bodyparts='all', cropped=True)
+
+        # play with these parameters for better visualization of the fitting
+        pupil_fit.line_thickness = 2
+        pupil_fit.fontsize = 10
+        pupil_fit.circle_color = (0,0,255)
+        pupil_fit.ellipse_color = (0,0,255)
+        pupil_fit.dotsize = 4
+
+        # check if we plot only a single frame. If so, return fig and ax
+        if end == start + 1:
+            ax = pupil_fit.plot_fitted_frame(start, ax=ax, fitting_method=fit_type)
+
+            # remove mask (i.e. visible area)
+            if not mask_flag:
+                del ax.images[1]
+
+            return fig, ax
+        
+        else:
+            pupil_fit.plot_fitted_multi_frames(start=start, end=end, fitting_method = fit_type)
         

@@ -48,7 +48,7 @@ class SegmentationMethod(dj.Lookup):
 @schema
 class StackSegmMethod(dj.Lookup):
     definition = """ # methods for 3-d stack segmentations
-    stacksegm_method         : tinyint
+    stacksegm_method            : tinyint
     ---
     name                        : varchar(16)
     details                     : varchar(255)
@@ -153,7 +153,8 @@ class TrackingMethod(dj.Lookup):
         [1, 'manual', 'manually tracking', 'python'],
         [2, 'deeplabcut', 'automatically tracking using deeplabcut package', 'python'],
     ]
-    
+
+@schema
 class SurfaceMethod(dj.Lookup):
     definition = """ # Methods used to compute surface of the brain
 

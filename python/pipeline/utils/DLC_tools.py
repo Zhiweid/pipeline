@@ -1,7 +1,5 @@
-
 from IPython import display
 import pylab as pl
-
 
 import math
 import yaml
@@ -12,20 +10,17 @@ import pandas as pd
 import ruamel.yaml
 import imageio
 import time
+import shutil
 import matplotlib.pyplot as plt
 
 import os
 # disable DLC GUI
 os.environ["DLClight"] = "True"
 
-from deeplabcut.utils import auxiliaryfunctions
-from deeplabcut.utils import video_processor
 from deeplabcut.utils import plotting
+from deeplabcut.utils import video_processor
+from deeplabcut.utils import auxiliaryfunctions
 import deeplabcut as dlc
-
-
-gputouse = 0
-
 
 def key_dict_generater(case):
     case_key = {'animal_id': None, 'session': None, 'scan_idx': None}
@@ -92,7 +87,7 @@ def smallest_enclosing_circle_naive(points):
 
 class PlotBodyparts():
 
-    def __init__(self, config, bodyparts='all'):
+    def __init__(self, config, bodyparts='all', cropped=False):
         """
         Input:
             config: dictionary
@@ -100,6 +95,10 @@ class PlotBodyparts():
             bodyparts: list
                 A list that contains bodyparts to plot. Each bodypart is in a string format. If none provided,
                 then by default it plots ALL existing bodyplots in config.yaml file.
+            cropped: boolean
+                whether to crop the video or not. Default False
+            cropped_coords: list
+                Provide 4 coordinates to crop the video if cropped is True. Otherwise, set to None
 
         """
 
@@ -109,33 +108,66 @@ class PlotBodyparts():
             self.bodyparts = bodyparts
         else:
             self.bodyparts = self.config['bodyparts']
+
+        self.cropped = cropped
+        self.cropped_coords = config['cropped_coords']
+
         self.shuffle = self.config['shuffle']
         self.trainingsetindex = self.config['trainingsetindex']
 
         self.project_path = self.config['project_path']
-        self.video_path = self.config['video_path']
-        self.compressed_cropped_dir_path = os.path.dirname(self.video_path)
-        self.clip = video_processor.VideoProcessorCV(fname=self.video_path)
+        self.orig_video_path = self.config['orig_video_path']
+        self.base_dir = os.path.dirname(self.orig_video_path)
+        self.compressed_cropped_dir_path = os.path.join(
+            os.path.dirname(self.orig_video_path), 'compressed_cropped')
+        self._case = os.path.basename(config['orig_video_path']).split('.')[0]
+        self.clip = video_processor.VideoProcessorCV(
+            fname=self.orig_video_path)
 
         self._trainFraction = self.config['TrainingFraction'][self.trainingsetindex]
         self._DLCscorer = auxiliaryfunctions.GetScorerName(
             self.config, self.shuffle, self._trainFraction)
 
-        self.label_path = self.video_path.split(
-            '.')[0] + self._DLCscorer + '.h5'
+        self.label_path = os.path.join(
+            self.compressed_cropped_dir_path, self._case + '_compressed_cropped' + self._DLCscorer + '.h5')
 
         self.df_label = pd.read_hdf(self.label_path)
 
         self.df_bodyparts = self.df_label[self._DLCscorer][self.bodyparts]
         self.df_bodyparts_likelihood = self.df_bodyparts.iloc[:, self.df_bodyparts.columns.get_level_values(
             1) == 'likelihood']
+
         self.df_bodyparts_x = self.df_bodyparts.iloc[:,
                                                      self.df_bodyparts.columns.get_level_values(1) == 'x']
         self.df_bodyparts_y = self.df_bodyparts.iloc[:,
                                                      self.df_bodyparts.columns.get_level_values(1) == 'y']
 
-        self.nx = self.clip.width()
-        self.ny = self.clip.height()
+        if not self.cropped:
+
+            self.nx = self.clip.width()
+            self.ny = self.clip.height()
+            self.df_bodyparts_x = self.df_bodyparts.iloc[:,
+                                                         self.df_bodyparts.columns.get_level_values(1) == 'x'] + self.cropped_coords[0]
+            self.df_bodyparts_y = self.df_bodyparts.iloc[:,
+                                                         self.df_bodyparts.columns.get_level_values(1) == 'y'] + self.cropped_coords[2]
+
+        else:
+
+            if self.cropped_coords is None:
+                raise ValueError(
+                    "cropped_coords are not provided! Must be in list with 4 elmnts long!")
+
+            if len(self.cropped_coords) != 4:
+                raise ValueError(
+                    "Only provided {} coordinates! U need 4!".format(len(self.cropped_coords)))
+
+            # self.df_bodyparts_x = self.df_bodyparts.iloc[:,
+            #                                             self.df_bodyparts.columns.get_level_values(1) == 'x'] - self.cropped_coords[0]
+            # self.df_bodyparts_y = self.df_bodyparts.iloc[:,
+            #                                             self.df_bodyparts.columns.get_level_values(1) == 'y'] - self.cropped_coords[2]
+
+            self.nx = self.clip.width() - self.cropped_coords[0]
+            self.ny = self.clip.height() - self.cropped_coords[2]
 
         # plotting properties
         self._dotsize = 7
@@ -147,6 +179,7 @@ class PlotBodyparts():
         self._alphavalue = self.config['alphavalue']
         self._fig_size = [12, 8]
         self._dpi = 100
+        self._fontsize = 30
 
         self.tf_likelihood_array = self.df_bodyparts_likelihood.values > self._pcutoff
 
@@ -177,6 +210,7 @@ class PlotBodyparts():
     @pcutoff.setter
     def pcutoff(self, value):
         self._pcutoff = value
+        self.tf_likelihood_array = self.df_bodyparts_likelihood.values > self._pcutoff
 
     @property
     def colormap(self):
@@ -217,6 +251,14 @@ class PlotBodyparts():
     @dpi.setter
     def dpi(self, value):
         self._dpi = value
+
+    @property
+    def fontsize(self):
+        return self._fontsize
+
+    @fontsize.setter
+    def fontsize(self, value):
+        self._fontsize = value
 
     def coords_pcutoff(self, frame_num):
         """
@@ -260,9 +302,18 @@ class PlotBodyparts():
 
         return fig, ax
 
-    def plot_core(self, fig, ax, frame_num):
+    def plot_core(self, ax, frame_num):
         # it's given in 3 channels but every channel is the same i.e. grayscale
         image = self.clip._read_specific_frame(frame_num)
+
+        if self.cropped:
+
+            x1 = self.cropped_coords[0]
+            x2 = self.cropped_coords[1]
+            y1 = self.cropped_coords[2]
+            y2 = self.cropped_coords[3]
+
+            image = image[y1:y2, x1:x2]
 
         ax_frame = ax.imshow(image, cmap='gray')
 
@@ -273,14 +324,15 @@ class PlotBodyparts():
 
         return {'ax_frame': ax_frame, 'ax_scatter': ax_scatter}
 
-    def plot_one_frame(self, frame_num, save_fig=False):
+    def plot_one_frame(self, frame_num, ax=None, save_fig=False):
+        # TODO refactor to reflect the sytle of plot_fitted_frame
+        if ax is None:
+            fig, ax = self.configure_plot()
 
-        fig, ax = self.configure_plot()
+        ax_dict = self.plot_core(ax, frame_num)
 
-        ax_dict = self.plot_core(fig, ax, frame_num)
-
-        plt.axis('off')
-        plt.title('frame num: ' + str(frame_num), fontsize=30)
+        ax.axis('off')
+        ax.set_title('frame num: ' + str(frame_num), fontsize=self.fontsize)
         plt.tight_layout()
 
         if save_fig:
@@ -288,18 +340,20 @@ class PlotBodyparts():
                 self.video_path.split('.')[0] + '_frame_' + str(frame_num) + '.png'))
 
         # return ax_dict
+        if ax is not None:
+            return ax
 
     def plot_multi_frames(self, start, end, save_gif=False):
 
-        plt_list = []
-
         fig, ax = self.configure_plot()
 
+        plt_list = []
+
         for frame_num in range(start, end):
-            ax_dict = self.plot_core(fig, ax, frame_num)
+            ax_dict = self.plot_core(ax, frame_num)
 
             plt.axis('off')
-            plt.title('frame num: ' + str(frame_num), fontsize=30)
+            plt.title('frame num: ' + str(frame_num), fontsize=self.fontsize)
             plt.tight_layout()
 
             fig.canvas.draw()
@@ -323,10 +377,41 @@ class PlotBodyparts():
 
         plt.close('all')
 
+    def make_movie(self, start, end):
+
+        import matplotlib.animation as animation
+
+        # initlize with start frame
+        fig, ax = self.configure_plot()
+
+        self.plot_one_frame(frame_num=start, ax=ax)
+
+        def update_frame(frame_num):
+
+            # clear out the axis
+            plt.cla()
+
+            self.plot_one_frame(frame_num=frame_num, ax=ax)
+
+        ani = animation.FuncAnimation(fig, update_frame, range(
+            start+1, end))  # , interval=int(1/self.clip.FPS)
+        # ani = animation.FuncAnimation(fig, self.plot_fitted_frame, 10)
+        writer = animation.writers['ffmpeg'](fps=self.clip.FPS)
+
+        # dpi=self.dpi, fps=self.clip.FPS
+        if self.cropped:
+            crop_flag = 'cropped'
+        else:
+            crop_flag = 'orig'
+        save_video_path = os.path.join(self.base_dir,
+                                       '{}_{}_{}_labeled.avi'.format(crop_flag,start, end))
+        ani.save(save_video_path, writer=writer, dpi=self.dpi)
+
+        return ani
+
 
 class PupilFitting(PlotBodyparts):
-    # for this class, all bodyparts must be provided... so why bother providing bodyparts as input?
-    def __init__(self, config, bodyparts='all'):
+    def __init__(self, config, bodyparts='all', cropped=False):
         """
         Input:
             config: dictionary
@@ -336,7 +421,8 @@ class PupilFitting(PlotBodyparts):
                 then by default it plots ALL existing bodyplots in config.yaml file.
 
         """
-        super().__init__(config, bodyparts=bodyparts)
+        super().__init__(config, bodyparts=bodyparts,
+                         cropped=cropped)
 
         self.complete_eyelid_graph = {'eyelid_top': 'eyelid_top_right',
                                       'eyelid_top_right': 'eyelid_right',
@@ -349,6 +435,8 @@ class PupilFitting(PlotBodyparts):
 
         self._circle_threshold_num = 3
         self._ellipse_threshold_num = 6
+        self._circle_color = (0, 255, 0)
+        self._ellipse_color = (0, 0, 255)
 
     @property
     def circle_threshold_num(self):
@@ -377,6 +465,22 @@ class PupilFitting(PlotBodyparts):
             raise ValueError("value must be equal to or more than 5!")
         else:
             self._ellipse_threshold_num = value
+
+    @property
+    def circle_color(self):
+        return self._circle_color
+
+    @circle_color.setter
+    def circle_color(self, value):
+        self._circle_color = value
+
+    @property
+    def ellipse_color(self):
+        return self._ellipse_color
+
+    @ellipse_color.setter
+    def ellipse_color(self, value):
+        self._ellipse_color = value
 
     def coords_pcutoff(self, frame_num):
         """
@@ -502,10 +606,10 @@ class PupilFitting(PlotBodyparts):
 
             # opencv has some issues with dealing with np objects. Cast it manually again
             frame = cv2.circle(img=np.array(frame), center=(int(round(x)), int(round(y))),
-                               radius=int(round(radius)), color=(0, 255, 0), thickness=self.line_thickness)
+                               radius=int(round(radius)), color=self.circle_color, thickness=self.line_thickness)
 
             mask = cv2.circle(img=mask, center=(int(round(x)), int(round(y))),
-                              radius=int(round(radius)), color=(0, 255, 0), thickness=self.line_thickness)
+                              radius=int(round(radius)), color=self.circle_color, thickness=self.line_thickness)
 
             # fill out the mask with 1s OUTSIDE of the mask, then invert 0 and 1
             # for cv2.floodFill, need a mask that is 2 pixels bigger than the input image
@@ -580,10 +684,10 @@ class PupilFitting(PlotBodyparts):
 
             # https://docs.opencv.org/3.0-beta/modules/imgproc/doc/drawing_functions.html#ellipse
             # cv2.ellipse(img, box, color[, thickness[, lineType]]) → img
-            frame = cv2.ellipse(np.array(frame), rotated_rect, color=(
-                0, 0, 255), thickness=self.line_thickness)
-            mask = cv2.ellipse(np.array(mask), rotated_rect, color=(
-                0, 0, 255), thickness=self.line_thickness)
+            frame = cv2.ellipse(np.array(
+                frame), rotated_rect, color=self.ellipse_color, thickness=self.line_thickness)
+            mask = cv2.ellipse(np.array(
+                mask), rotated_rect, color=self.ellipse_color, thickness=self.line_thickness)
 
             # fill out the mask with 1s OUTSIDE of the mask, then invert 0 and 1
             # for cv2.floodFill, need a mask that is 2 pixels bigger than the input image
@@ -686,6 +790,15 @@ class PupilFitting(PlotBodyparts):
 
         image = self.clip._read_specific_frame(frame_num)
 
+        if self.cropped:
+
+            x1 = self.cropped_coords[0]
+            x2 = self.cropped_coords[1]
+            y1 = self.cropped_coords[2]
+            y2 = self.cropped_coords[3]
+
+            image = image[y1:y2, x1:x2]
+
         eyelid_connected = self.connect_eyelids(
             frame_num=frame_num, frame=image)
 
@@ -736,14 +849,17 @@ class PupilFitting(PlotBodyparts):
             raise ValueError(
                 'fitting method must be either an ellipse or a circle!')
 
-        plt.title('frame num: ' + str(frame_num), fontsize=30)
+        ax.set_title('frame num: ' + str(frame_num), fontsize=self.fontsize)
 
-        plt.axis('off')
+        ax.axis('off')
         plt.tight_layout()
 
         if save_fig:
             plt.savefig(os.path.join(
                 self.compressed_cropped_dir_path, 'fitted_frame_' + str(frame_num) + '.png'))
+
+        if ax is not None:
+            return ax
 
     def plot_fitted_multi_frames(self, start, end, fitting_method='circle', save_gif=False):
 
@@ -799,9 +915,13 @@ class PupilFitting(PlotBodyparts):
         # ani = animation.FuncAnimation(fig, self.plot_fitted_frame, 10)
         writer = animation.writers['ffmpeg'](fps=self.clip.FPS)
 
-        # dpi=self.dpi, fps=self.clip.FPS
-        save_video_path = self.video_path.split('.')[0] + '_fitted_' + \
-            str(start) + '_' + str(end) + '_labeled.avi'
+        if self.cropped:
+            crop_flag = 'cropped'
+        else:
+            crop_flag = 'orig'
+        save_video_path = os.path.join(self.base_dir,
+                                       '{}_{}_{}_labeled.avi'.format(crop_flag,start, end))
+
         ani.save(save_video_path, writer=writer, dpi=self.dpi)
 
         return ani
@@ -815,7 +935,15 @@ def make_short_video(tracking_dir):
         tracking_dir: string
             String that specifies the full path of tracking directory
     Return:
-        None
+        short_vid_path: string
+            String that specifies the full path of short video
+        original_width: int
+            width of the original video
+        original_height: int
+            height of the original video
+        mid_frame_num: int
+            middle frame number of the original video
+
     """
     from subprocess import Popen, PIPE
 
@@ -826,7 +954,7 @@ def make_short_video(tracking_dir):
 
     input_video_path = os.path.join(tracking_dir, case + '.avi')
 
-    out_vid_path = os.path.join(tracking_dir, 'short', case + suffix)
+    short_vid_path = os.path.join(tracking_dir, 'short', case + suffix)
 
     cap = cv2.VideoCapture(input_video_path)
 
@@ -840,22 +968,33 @@ def make_short_video(tracking_dir):
     minutes, seconds = divmod(duration, 60)
     hours, minutes = divmod(minutes, 60)
 
-    print('\nMaking a short video!')
+    if os.path.exists(short_vid_path):
+        # video already exists, even before processed. Hence delete it and recreate
+        print('\nShort video already exists! This video might be corrupted, hence deleting and recreating!')
 
-    cmd = ['ffmpeg', '-i', input_video_path, '-ss',
-           '{}:{}:{}'.format(hours, minutes, seconds), '-t', '5', '-c', 'copy', out_vid_path]
+        # delete short video directory
+        shutil.rmtree(os.path.dirname(short_vid_path))
 
-    # call ffmpeg to make a short video
-    p = Popen(cmd, stdin=PIPE)
-    # close ffmpeg
-    p.wait()
+        # recreate the short video directory
+        os.mkdir(os.path.join(tracking_dir, 'short'))
 
-    print('\nSuccessfully created a short video!')
+    else:
+        print('\nMaking a short video!')
 
-    return out_vid_path, original_width, original_height, mid_frame_num
+        cmd = ['ffmpeg', '-i', input_video_path, '-ss',
+               '{}:{}:{}'.format(hours, minutes, seconds), '-t', '5', '-c', 'copy', short_vid_path]
+
+        # call ffmpeg to make a short video
+        p = Popen(cmd, stdin=PIPE)
+        # close ffmpeg
+        p.wait()
+
+        print('\nSuccessfully created a short video!')
+
+    return short_vid_path, original_width, original_height, mid_frame_num
 
 
-def predict_labels(vid_path, config):
+def predict_labels(vid_path, config, gputouse=0):
     """
     Predict labels on a given video
 
@@ -914,6 +1053,19 @@ def obtain_cropping_coords(short_h5_path, DLCscorer, config):
             eyelid_coord_pcutoff = df_eyelid_coord[coord][(
                 df_eyelid_likelihood.loc[:, eyelid_label].values > config['pcutoff'])][eyelid_label][coord].values
 
+            # if the video is in bad quality, it is possible that none of the labels are above pcutoff results in an empty array.
+            # If this happens, append original height and width
+            if not eyelid_coord_pcutoff.size:
+                if coord == 'x':
+                    coords_dict[coord+'min'].append(0)
+                    coords_dict[coord+'max'].append(config['original_width'])
+                elif coord == 'y':
+                    coords_dict[coord+'min'].append(0)
+                    coords_dict[coord+'max'].append(config['original_height'])
+
+                break
+
+            # only retain values within 1 std deviation from mean
             eyelid_coord_68 = eyelid_coord_pcutoff[(eyelid_coord_pcutoff < np.mean(eyelid_coord_pcutoff) + np.std(eyelid_coord_pcutoff)) *
                                                    (eyelid_coord_pcutoff > np.mean(
                                                     eyelid_coord_pcutoff) - np.std(eyelid_coord_pcutoff))]
@@ -991,22 +1143,33 @@ def make_compressed_cropped_video(tracking_dir, cropped_coords):
 
     input_video_path = os.path.join(tracking_dir, case + '.avi')
 
-    out_vid_path = os.path.join(
+    cc_vid_path = os.path.join(
         tracking_dir, 'compressed_cropped', case + suffix)
 
-    out_w = cropped_coords['cropped_x1'] - cropped_coords['cropped_x0']
-    out_h = cropped_coords['cropped_y1'] - cropped_coords['cropped_y0']
-    print('\nMaking a compressed and cropped video!')
+    if os.path.exists(cc_vid_path):
+        # video already exists, even before processed. Hence delete it and recreate
+        print("\ncompressed and cropped video already exists! This video might be corrupted, hence deleting and recreating!")
 
-    # crf: use value btw 17 and 28 (lower the number, higher the quality of the video)
-    # intra: no compressing over time. only over space
-    cmd = ['ffmpeg', '-i', '{}'.format(input_video_path), '-vcodec', 'libx264', '-crf', '17', '-intra', '-filter:v',
-           "crop={}:{}:{}:{}".format(out_w, out_h, cropped_coords['cropped_x0'], cropped_coords['cropped_y0']), '{}'.format(out_vid_path)]
+        # delete short video directory
+        shutil.rmtree(os.path.dirname(cc_vid_path))
 
-    # call ffmpeg to make a short video
-    p = Popen(cmd, stdin=PIPE)
-    # close ffmpeg
-    p.wait()
-    print('\nSuccessfully created a compressed & cropped video!\n')
+        # recreate the short video directory
+        os.mkdir(os.path.join(tracking_dir, 'compressed_cropped'))
 
-    return out_vid_path
+    else:
+        out_w = cropped_coords['cropped_x1'] - cropped_coords['cropped_x0']
+        out_h = cropped_coords['cropped_y1'] - cropped_coords['cropped_y0']
+        print('\nMaking a compressed and cropped video!')
+
+        # crf: use value btw 17 and 28 (lower the number, higher the quality of the video)
+        # intra: no compressing over time. only over space
+        cmd = ['ffmpeg', '-i', '{}'.format(input_video_path), '-vcodec', 'libx264', '-crf', '17', '-intra', '-filter:v',
+               "crop={}:{}:{}:{}".format(out_w, out_h, cropped_coords['cropped_x0'], cropped_coords['cropped_y0']), '{}'.format(cc_vid_path)]
+
+        # call ffmpeg to make a short video
+        p = Popen(cmd, stdin=PIPE)
+        # close ffmpeg
+        p.wait()
+        print('\nSuccessfully created a compressed & cropped video!\n')
+
+    return cc_vid_path
