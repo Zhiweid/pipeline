@@ -9,7 +9,7 @@ import time
 #     next_scans = (experiment.AutoProcessing() & 'priority > {}'.format(priority) &
 #                   (experiment.Scan() & 'scan_ts > "2019-01-01 00:00:00"'))
 
-next_scans = (experiment.AutoProcessing  & 'priority < 120' &
+next_scans = (experiment.AutoProcessing  & 'priority >= 120' &
               (experiment.Scan & 'scan_ts > "2019-01-01 00:00:00"'))
 
 # stimulus
