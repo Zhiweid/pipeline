@@ -7,7 +7,7 @@ from commons import lab
 
 
 schema = dj.schema('pipeline_experiment', locals(), create_tables=False)
-
+experiment = dj.create_virtual_module('pipeline_experiment', 'pipeline_experiment')
 
 @schema
 class Fluorophore(dj.Lookup):
@@ -332,6 +332,62 @@ class MonitorCalibration(dj.Manual):
         plt.legend()
 
         return fig
+
+@schema
+class MonitorCalibrationFromH5(dj.Lookup):
+    definition = """ # monitor luminance calibration
+    -> experiment.PhotodiodeCalibration.proj(dummy_pdcalib_pixel='pixel_value', pdcalib_blanking='blanking')
+    -> experiment.Scan
+    ---
+    pixel_value             : mediumblob      # control pixel value (0-255)
+    median_pd               : mediumblob      # median photodiode value
+    luminance               : mediumblob      # luminance in cd/m^2
+    amplitude               : float           # lum = Amp*pixel_value^gamma + offset
+    gamma                   : float           #
+    offset                  : float           #
+    ts                      : timestamp       # timestamp
+    """
+
+    @staticmethod
+    def func(x, a, b, m):
+        return a + b * (x**m)
+
+    def get_gamma_function(self, moncalib_key, pdcalib_key):
+        from scipy.optimize import curve_fit
+        from scipy import interpolate
+        # get the median pd values from the monitor calibration scan
+        # pixel_values, mean_pd, median_pd = (experiment.MonitorCalibration & moncalib_key).fetch1('pixel_value', 'pd_mean', 'pd_median')
+        median_pd = np.load('/external/zhiwei/moncalib_0-3195-1_median_pd.npy')
+        pixel_value = np.linspace(0, 255, 52)
+
+        # get the most recent pd calibration trial
+        pixels, lums, pds = (experiment.PhotodiodeCalibration() & pdcalib_key).fetch('pixel_value', 'luminance', 'pd_voltage', order_by='pixel_value')
+        # Enforces median_pd increases monotonically as pixel value increases
+        diff_mask = (median_pd - median_pd[0]) >= 0.0
+        median_pd = diff_mask * (median_pd - median_pd[0]) + median_pd[0]
+        if min(median_pd) < min(pds):
+            median_pd += min(pds) - min(median_pd)
+        # fit a function of pd voltages and luminance 
+        pd2lum_params, _ = curve_fit(self.func, pds, lums)
+
+        # fit a function of pixel values and the luminance
+        px2lum_params, _ = curve_fit(self.func, pixel_value, self.func(median_pd, *pd2lum_params))
+        offset, amplitude, gamma = px2lum_params
+        px2lum_interp = interpolate.interp1d(pixel_value, self.func(median_pd, *pd2lum_params))
+        inv_px2lum_interp = interpolate.interp1d(self.func(median_pd, *pd2lum_params), pixel_value)
+        luminance = px2lum_interp(pixel_value)
+
+        return pixel_value, median_pd, luminance, offset, amplitude, gamma, px2lum_interp, inv_px2lum_interp
+
+    def fill(self, moncalib_key, pdcalib_key):
+        pd_key = (experiment.PhotodiodeCalibration.proj(dummy_pdcalib_pixel='pixel_value', pdcalib_blanking='blanking') & pdcalib_key & 'dummy_pdcalib_pixel LIKE 0').fetch1('KEY')
+        pixel_value, median_pd, luminance, offset, amplitude, gamma, _, _ = self.get_gamma_function(moncalib_key, pdcalib_key)
+        self.insert1({**pd_key, **moncalib_key, 'pixel_value': pixel_value, 'median_pd': median_pd, 'luminance': luminance,
+                     'offset': offset, 'amplitude': amplitude, 'gamma': gamma})
+    
+    def get_interpolation(self, moncalib_key, pdcalib_key):
+        _, _, _, _, _, _, f, f_inv = self.get_gamma_function(moncalib_key, pdcalib_key)
+        return f, f_inv
 
 
 @schema
