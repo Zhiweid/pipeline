@@ -268,6 +268,10 @@ class Quality(dj.Computed):
                                             'quantal_size': quantal_size,
                                             'zero_level': zero_level,
                                             'quantal_frame': quantal_frame})
+                
+                abnormal = np.array(abnormal)
+                peaks = np.array(peaks)
+                prominences = np.array(prominences)
                 self.EpileptiformEvents.insert1({**field_key, 'frequency': abnormal_freq,
                                                  'abn_indices': abnormal,
                                                  'peak_indices': peaks,
@@ -1677,16 +1681,11 @@ class ScanDone(dj.Computed):
 
     def make(self, key):
         scan_key = {k: v for k, v in key.items() if k in self.heading}
-
-        # Delete current ScanDone entry
-        with dj.config(safemode=False):
-            (ScanDone() & scan_key).delete()
-
-        # Reinsert in ScanDone
-        self.insert1(scan_key)
-
-        # Insert all processed fields in Partial
-        ScanDone.Partial().insert((Activity() & scan_key).proj())
+        nfields_populated = len(Activity & scan_key)
+        nfields = len(ScanInfo.Field & scan_key)
+        if(nfields == nfields_populated):
+            self.insert1(scan_key)
+            self.Partial.insert(Activity & scan_key,skip_duplicates=True,ignore_extra_fields=True)
 
 
 from . import stack
