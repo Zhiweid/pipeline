@@ -694,7 +694,7 @@ class Tracking(dj.Computed):
             vid_path = self.get_video_path(key)
             vid_dir = os.path.dirname(os.path.normpath(vid_path))
             tracking_dir_name = os.path.basename(
-                os.path.normpath(vid_path)).split('.')[0] + '_tracking'
+                os.path.normpath(vid_path)).split('.')[0] + '_tracking_copy2'
 
             tracking_dir = os.path.join(vid_dir, tracking_dir_name)
 
@@ -913,7 +913,7 @@ class FittedPupil(dj.Computed):
             config['trainingsetindex'] = dlc_config['trainingsetindex']
 
             # find path to original video symlink
-            base_path = os.path.splitext(avi_path)[0] + '_tracking'
+            base_path = os.path.splitext(avi_path)[0] + '_tracking_copy2'
             video_path = os.path.join(base_path, os.path.basename(avi_path))
 
             config['orig_video_path'] = video_path
