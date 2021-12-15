@@ -13,6 +13,13 @@ logging.getLogger('datajoint.connection').setLevel(logging.DEBUG)
 if hasattr(dj.connection, 'query_log_max_length'):
     dj.connection.query_log_max_length = 3000 
 
+# delete errors
+err_msg_timeout = 'error_message = "InternalError: (1205, \'Lock wait timeout exceeded; try restarting transaction\')"'
+err_msg_sigterm = 'error_message = "SystemExit: SIGTERM received"'
+timestamp = 'timestamp > "2021-12-10"'
+for schema in [stimulus, treadmill, pupil, posture, stack, reso, meso, fuse]:
+    (schema.jobs & [err_msg_timeout, err_msg_sigterm] & timestamp).delete()
+
 
 # # Scans
 # for priority in range(120, -130, -10):  # highest to lowest priority
@@ -52,7 +59,7 @@ for pipe in [reso, meso]:
                                      reserve_jobs=True, suppress_errors=True)
     pipe.ScanSet.populate(next_scans, reserve_jobs=True, suppress_errors=True)
     time.sleep(60)
-    pipe.Activity.populate(next_scans, {'spike_method': 5}, reserve_jobs=True)
+    pipe.Activity.populate(next_scans, reserve_jobs=True, suppress_errors=True)
     full_scans = (pipe.ScanInfo.proj() & pipe.Activity) - (pipe.ScanInfo.Field -
                                                            pipe.Activity)
     pipe.ScanDone.populate(full_scans & next_scans, reserve_jobs=True,
