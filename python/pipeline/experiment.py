@@ -334,105 +334,6 @@ class MonitorCalibration(dj.Manual):
         return fig
 
 @schema
-class MonitorCalibrationFromH5(dj.Lookup):
-    definition = """ # monitor luminance calibration
-    -> experiment.PhotodiodeCalibration.proj(dummy_pdcalib_pixel='pixel_value', pdcalib_blanking='blanking')
-    -> experiment.Scan
-    ---
-    pixel_value             : mediumblob      # control pixel value (0-255)
-    median_pd               : mediumblob      # median photodiode value
-    luminance               : mediumblob      # luminance in cd/m^2
-    amplitude               : float           # lum = Amp*pixel_value^gamma + offset
-    gamma                   : float           #
-    offset                  : float           #
-    ts                      : timestamp       # timestamp
-    """
-
-    @staticmethod
-    def func(x, a, b, m):
-        return a + b * (x**m)
-
-    def get_gamma_function(self, moncalib_key, pdcalib_key):
-        from pipeline.utils.h5 import read_behavior_file
-        from scipy.optimize import curve_fit
-        from scipy import interpolate
-        
-        # Code borrowed from Moncalib
-        scan_path = (Scan & moncalib_key).local_filenames_as_wildcard
-        scan_dir = os.path.split(scan_path)[0]
-
-        scan_file = (Scan & moncalib_key).fetch1('filename')
-        behavior_file = (Scan.BehaviorFile() & moncalib_key).fetch1('filename')
-
-        full_scan_file = os.path.join(scan_dir, f"{scan_file}_00001.tif")
-        full_beh_file = os.path.join(scan_dir, behavior_file)
-
-        scan_on = os.path.isfile(full_scan_file)
-
-        data = read_behavior_file(full_beh_file)
-
-        ts = data["ts"]
-        pd = data["syncPd"]
-        trial_starts = data["trialnum_ts"][1]
-        
-        # deal with 32-bit unsigned integer wrapping
-        wrap_idx = np.where(np.diff(trial_starts) < 0)[0] 
-        if (len(wrap_idx) > 0):
-            for i in range(len(wrap_idx)):
-                trial_starts[wrap_idx[i]+1:] = 2**32 + trial_starts[wrap_idx[i]+1:]
-
-        if len(trial_starts) != 52: # 52 pixel values (0:255:5)
-            self.insert1(dict(key, scan_on=scan_on, valid=False))
-            return
-
-        trial_length = np.diff(trial_starts).mean()
-        trial_ends = np.concatenate([trial_starts[1:], [trial_starts[-1] + trial_length]])
-
-        median_pd = []
-        for start, end in zip(trial_starts, trial_ends):
-            trial_mask = (ts > start) & (ts < end)
-            median_pd += [np.median(pd[trial_mask])]
-    
-        pixel_value = np.linspace(0, 255, 52)
-        pixel_value_for_fit = pixel_value.copy()
-        pixel_value_for_fit[0] = 1e-9
-
-        # get the most recent pd calibration trial
-        pixels, lums, pds = (experiment.PhotodiodeCalibration() & pdcalib_key).fetch('pixel_value', 'luminance', 'pd_voltage', order_by='pixel_value')
-        # Enforces median_pd increases monotonically as pixel value increases
-        diff_mask = (median_pd - median_pd[0]) >= 0.0
-        median_pd = diff_mask * (median_pd - median_pd[0]) + median_pd[0]
-        if min(median_pd) < min(pds):
-            median_pd += min(pds) - min(median_pd)
-            
-        # fit a function between pd voltages and luminance 
-        pd2lum_params, _ = curve_fit(self.func, pds, lums)
-        # fit a function between pixel values and the pd voltages
-        px2pd_params, _ = curve_fit(self.func, pixel_value_for_fit, median_pd)
-        # fit a function between pixel values and luminance
-        px2lum_params, _ = curve_fit(self.func, pixel_value_for_fit, self.func(median_pd, *pd2lum_params))
-        
-        pd_offset, pd_amplitude, pd_gamma = px2pd_params
-        lum_offset, lum_amplitude, lum_gamma = px2lum_params
-        
-        luminance = self.func(median_pd, *pd2lum_params)
-        px2lum_interp = interpolate.interp1d(pixel_value, luminance)
-        inv_px2lum_interp = interpolate.interp1d(luminance, pixel_value)
-
-        return pixel_value, median_pd, luminance, pd_offset, pd_amplitude, pd_gamma, lum_offset, lum_amplitude, lum_gamma, px2lum_interp, inv_px2lum_interp
-
-    def fill(self, moncalib_key, pdcalib_key):
-        pd_key = (experiment.PhotodiodeCalibration.proj(dummy_pdcalib_pixel='pixel_value', pdcalib_blanking='blanking') & pdcalib_key & 'dummy_pdcalib_pixel LIKE 0').fetch1('KEY')
-        pixel_value, median_pd, luminance, pd_offset, pd_amplitude, pd_gamma, _, _, _, _, _ = self.get_gamma_function(moncalib_key, pdcalib_key)
-        self.insert1({**pd_key, **moncalib_key, 'pixel_value': pixel_value, 'median_pd': median_pd, 'luminance': luminance,
-                     'offset': pd_offset, 'amplitude': pd_amplitude, 'gamma': pd_gamma})
-    
-    def get_interpolation(self, moncalib_key, pdcalib_key):
-        _, _, _, _, _, _, _, _, _, f, f_inv = self.get_gamma_function(moncalib_key, pdcalib_key)
-        return f, f_inv
-
-
-@schema
 class MouseRoom(dj.Lookup):
     definition = """ # Mouse location after surgery
     mouse_room                : varchar(64)         # Building letter along with room number
@@ -841,5 +742,103 @@ class MonCalib(dj.Computed):
         self.insert1(dict(key, scan_on=scan_on, valid=True))
         self.Fit.insert1(dict(key, scale=scale, gamma=gamma, offset=offset, fvu=fvu))
 
+@schema
+class MonitorCalibrationFromH5(dj.Lookup):
+    definition = """ # monitor luminance calibration
+    -> experiment.PhotodiodeCalibration.proj(dummy_pdcalib_pixel='pixel_value', pdcalib_blanking='blanking')
+    -> experiment.Scan
+    ---
+    pixel_value             : mediumblob      # control pixel value (0-255)
+    median_pd               : mediumblob      # median photodiode value
+    luminance               : mediumblob      # luminance in cd/m^2
+    amplitude               : float           # lum = Amp*pixel_value^gamma + offset
+    gamma                   : float           #
+    offset                  : float           #
+    ts                      : timestamp       # timestamp
+    """
 
+    @staticmethod
+    def func(x, a, b, m):
+        return a + b * (x**m)
+
+    def get_gamma_function(self, moncalib_key, pdcalib_key):
+        from pipeline.utils.h5 import read_behavior_file
+        from scipy.optimize import curve_fit
+        from scipy import interpolate
+        
+        # Code borrowed from Moncalib
+        scan_path = (Scan & moncalib_key).local_filenames_as_wildcard
+        scan_dir = os.path.split(scan_path)[0]
+
+        scan_file = (Scan & moncalib_key).fetch1('filename')
+        behavior_file = (Scan.BehaviorFile() & moncalib_key).fetch1('filename')
+
+        full_scan_file = os.path.join(scan_dir, f"{scan_file}_00001.tif")
+        full_beh_file = os.path.join(scan_dir, behavior_file)
+
+        scan_on = os.path.isfile(full_scan_file)
+
+        data = read_behavior_file(full_beh_file)
+
+        ts = data["ts"]
+        pd = data["syncPd"]
+        trial_starts = data["trialnum_ts"][1]
+        
+        # deal with 32-bit unsigned integer wrapping
+        wrap_idx = np.where(np.diff(trial_starts) < 0)[0] 
+        if (len(wrap_idx) > 0):
+            for i in range(len(wrap_idx)):
+                trial_starts[wrap_idx[i]+1:] = 2**32 + trial_starts[wrap_idx[i]+1:]
+
+        if len(trial_starts) != 52: # 52 pixel values (0:255:5)
+            self.insert1(dict(key, scan_on=scan_on, valid=False))
+            return
+
+        trial_length = np.diff(trial_starts).mean()
+        trial_ends = np.concatenate([trial_starts[1:], [trial_starts[-1] + trial_length]])
+
+        median_pd = []
+        for start, end in zip(trial_starts, trial_ends):
+            trial_mask = (ts > start) & (ts < end)
+            median_pd += [np.median(pd[trial_mask])]
+    
+        pixel_value = np.linspace(0, 255, 52)
+        pixel_value_for_fit = pixel_value.copy()
+        pixel_value_for_fit[0] = 1e-9
+
+        # get the most recent pd calibration trial
+        pixels, lums, pds = (experiment.PhotodiodeCalibration() & pdcalib_key).fetch('pixel_value', 'luminance', 'pd_voltage', order_by='pixel_value')
+        # Enforces median_pd increases monotonically as pixel value increases
+        diff_mask = (median_pd - median_pd[0]) >= 0.0
+        median_pd = diff_mask * (median_pd - median_pd[0]) + median_pd[0]
+        if min(median_pd) < min(pds):
+            median_pd += min(pds) - min(median_pd)
+            
+        # fit a function between pd voltages and luminance 
+        pd2lum_params, _ = curve_fit(self.func, pds, lums)
+        # fit a function between pixel values and the pd voltages
+        px2pd_params, _ = curve_fit(self.func, pixel_value_for_fit, median_pd)
+        # fit a function between pixel values and luminance
+        px2lum_params, _ = curve_fit(self.func, pixel_value_for_fit, self.func(median_pd, *pd2lum_params))
+        
+        pd_offset, pd_amplitude, pd_gamma = px2pd_params
+        lum_offset, lum_amplitude, lum_gamma = px2lum_params
+        
+        luminance = self.func(median_pd, *pd2lum_params)
+        px2lum_interp = interpolate.interp1d(pixel_value, luminance)
+        inv_px2lum_interp = interpolate.interp1d(luminance, pixel_value)
+
+        return pixel_value, median_pd, luminance, pd_offset, pd_amplitude, pd_gamma, lum_offset, lum_amplitude, lum_gamma, px2lum_interp, inv_px2lum_interp
+
+    def fill(self, moncalib_key, pdcalib_key):
+        pd_key = (experiment.PhotodiodeCalibration.proj(dummy_pdcalib_pixel='pixel_value', pdcalib_blanking='blanking') & pdcalib_key & 'dummy_pdcalib_pixel LIKE 0').fetch1('KEY')
+        pixel_value, median_pd, luminance, pd_offset, pd_amplitude, pd_gamma, _, _, _, _, _ = self.get_gamma_function(moncalib_key, pdcalib_key)
+        self.insert1({**pd_key, **moncalib_key, 'pixel_value': pixel_value, 'median_pd': median_pd, 'luminance': luminance,
+                     'offset': pd_offset, 'amplitude': pd_amplitude, 'gamma': pd_gamma})
+    
+    def get_interpolation(self, moncalib_key, pdcalib_key):
+        _, _, _, _, _, _, _, _, _, f, f_inv = self.get_gamma_function(moncalib_key, pdcalib_key)
+        return f, f_inv
+
+    
 schema.spawn_missing_classes()
