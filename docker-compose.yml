@@ -2,18 +2,22 @@ version: '2.0'
 
 services:
   notebook:
-    #build: .
     image: ninai/stimulus-pipeline:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile.st
     ports:
-      - "8888:8888"
+      - "7777:8888"
+      # - "7776:8501"
+      # - "7775:8503"
     volumes:
       - /mnt/:/mnt/
-      - /home/pipeline_data/:/tmp/
-      - ./notebooks:/notebooks
-      # - /home/zhiwei/Documents/pipeline/notebooks:/notebooks
+      - /tmp:/tmp
+      - .:/data/pipeline/
+      - ../stimuli:/data/stimuli
     env_file: .env
     environment:
-      - DISPLAY=$DISPLAY
+      - DISPLAY=unix$DISPLAY
     entrypoint:
       - jupyter 
       - lab
@@ -35,17 +39,17 @@ services:
       - /data/pipeline/python/scripts/populate-minion.py
 
 
-  minion-gpu:
-    image: ninai/pipeline:tf-gpu
-    runtime: nvidia
-    volumes:
-      - /mnt/:/mnt/
-      - /home/pipeline_data:/tmp/
-      - .:/data/pipeline
-    env_file: .env
-    entrypoint:
-      - python3 
-      - /data/pipeline/python/scripts/populate-minion_gpu.py
+#  minion-gpu:
+ #   image: ninai/pipeline:tf-gpu
+ #   runtime: nvidia
+ #   volumes:
+ #     - /mnt/:/mnt/
+ #     - /home/pipeline_data:/tmp/
+ #     - .:/data/pipeline
+ #   env_file: .env
+ #   entrypoint:
+ #     - python3 
+ #     - /data/pipeline/python/scripts/populate-minion_gpu.py
 
   
   bash:
