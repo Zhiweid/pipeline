@@ -708,18 +708,27 @@ class MonCalib(dj.Computed):
         pd = data["syncPd"]
         trial_starts = data["trialnum_ts"][1]
 
-        # deal with 32-bit unsigned integer wrapping
-        wrap_idx = np.where(np.diff(trials_starts) < 0)[0] 
-        if (len(wrap_idx) > 0):
-            for i in range(len(wrap_idx)):
-                trials_starts[wrap_idx[i]+1:] = 2**32 + trials_starts[wrap_idx[i]+1:]
-
         if len(trial_starts) != 52: # 52 pixel values (0:255:5)
             self.insert1(dict(key, scan_on=scan_on, valid=False))
             return
 
+        # deal with 32-bit unsigned integer wrapping
+        for uint8 in [ts, trial_starts]:
+            wrap_idx = np.where(np.diff(uint8) < 0)[0] 
+            if (len(wrap_idx) > 0):
+                for i in range(len(wrap_idx)):
+                    uint8[wrap_idx[i]+1:] = 2**32 + uint8[wrap_idx[i]+1:]
+
+        # 100ms delay at 10MHz
+        trial_starts += 1e6
+
+        # compute trial length and trial ends
         trial_length = np.diff(trial_starts).mean()
         trial_ends = np.concatenate([trial_starts[1:], [trial_starts[-1] + trial_length]])
+
+        # middle half of the trial
+        trial_starts += trial_length / 4
+        trial_ends -= trial_length / 4
 
         pd_median = []
         for start, end in zip(trial_starts, trial_ends):
