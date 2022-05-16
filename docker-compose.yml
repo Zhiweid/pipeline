@@ -2,7 +2,7 @@ version: '2.0'
 
 services:
   notebook:
-    image: ninai/stimulus-pipeline:latest
+    image: at-docker.ad.bcm.edu:5000/pipeline:latest
     # build:
     #   context: .
     #   dockerfile: Dockerfile.st
@@ -28,7 +28,7 @@ services:
 
 
   minion:
-    image: ninai/stimulus-pipeline:latest
+    image: at-docker.ad.bcm.edu:5000/pipeline:latest
     volumes:
       - /mnt/:/mnt/
       - /home/pipeline_data:/tmp/
