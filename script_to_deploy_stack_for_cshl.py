@@ -1,11 +1,11 @@
 from pipeline import stack, meso
 
-ls = [dict(stack_keys = [{'animal_id': 27393, 'session': 1, 'stack_idx': 28},
-                        {'animal_id': 27393, 'session': 2, 'stack_idx': 7},],
+ls = [dict(stack_keys = [{'animal_id': 27393, 'stack_session': 1, 'stack_idx': 28},
+                        {'animal_id': 27393, 'stack_session': 2, 'stack_idx': 7},],
            scan_keys = [{'animal_id': 27393, 'session': 1, 'scan_idx': 25},
                         {'animal_id': 27393, 'session': 1, 'scan_idx': 26},]),
-      dict(stack_keys = [{'animal_id': 27578, 'session': 1, 'stack_idx': 8},
-                        {'animal_id': 27578, 'session': 2, 'stack_idx': 2},],
+      dict(stack_keys = [{'animal_id': 27578, 'stack_session': 1, 'stack_idx': 8},
+                        {'animal_id': 27578, 'stack_session': 2, 'stack_idx': 2},],
             scan_keys = [{'animal_id': 27578, 'session': 1, 'scan_idx': 5},
                         {'animal_id': 27578, 'session': 1, 'scan_idx': 6},
                         #{'animal_id': 27578, 'session': 1, 'scan_idx': 14},
