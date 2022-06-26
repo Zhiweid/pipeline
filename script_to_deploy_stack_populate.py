@@ -6,5 +6,8 @@ import datajoint as dj
 # mei_keys = stack.Registration * analyses.DEIClosedLoopSummaryResults.proj(scan_session = 'session') & 'scan_session = stack_session'
 # imagenet_keys = stack.Registration * (data_schemas.StaticMultiDatasetGroupAssignment() & 'group_id in (233, 237, 239, 243, 271, 272)').proj(scan_session = 'session') & 'scan_session = stack_session'
 # stack.RegistrationOverTime.populate([mei_keys, imagenet_keys], reserve_jobs=True, order='random')
-keys = stack.Registration & 'animal_id = 27620'
-stack.RegistrationOverTime.populate(keys, reserve_jobs=True, order='random')
+
+stack_keys = [{'animal_id': 27468, 'stack_session': 13, 'stack_idx': 19},
+              {'animal_id': 27468, 'stack_session': 14, 'stack_idx': 11},
+              {'animal_id': 27802, 'stack_session': 3, 'stack_idx': 21},]
+stack.StackSet.populate(stack_keys, reserve_jobs=True)
