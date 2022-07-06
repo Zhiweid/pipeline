@@ -3,11 +3,10 @@ import datajoint as dj
 data_schemas = dj.create_virtual_module('neurodata_static', 'neurodata_static')
 analyses = dj.create_virtual_module('neurostatic_pilot_analyses', 'neurostatic_pilot_analyses')
 
-# mei_keys = stack.Registration * analyses.DEIClosedLoopSummaryResults.proj(scan_session = 'session') & 'scan_session = stack_session'
-imagenet_keys = stack.Registration * (data_schemas.StaticMultiDatasetGroupAssignment() & 'group_id in (279)').proj(scan_session = 'session') & 'scan_session = stack_session'
-stack.RegistrationOverTime.populate(imagenet_keys, reserve_jobs=True, order='random')
-
-# stack.RegistrationOverTime.populate([mei_keys, imagenet_keys], reserve_jobs=True, order='random')
+groups = [233, 237, 239, 243, 271, 272, 273, 275, 279]
+mei_keys = stack.Registration * analyses.DEIClosedLoopSummaryResults.proj(scan_session = 'session') & 'scan_session = stack_session'
+imagenet_keys = stack.Registration * (data_schemas.StaticMultiDatasetGroupAssignment() & [{'group_id':g} for g in groups]).proj(scan_session = 'session') & 'scan_session = stack_session'
+stack.RegistrationOverTime.populate([mei_keys, imagenet_keys], reserve_jobs=True, order='random')
 
 # stack_keys = [{'animal_id': 27468, 'stack_session': 13, 'stack_idx': 19},
 #               {'animal_id': 27468, 'stack_session': 14, 'stack_idx': 11},
