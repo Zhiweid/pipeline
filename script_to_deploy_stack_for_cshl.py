@@ -3,12 +3,23 @@ from pipeline import stack, meso
 ls = [dict(stack_keys = [{'animal_id': 27393, 'stack_session': 1, 'stack_idx': 28},
                         {'animal_id': 27393, 'stack_session': 2, 'stack_idx': 7},],
            scan_keys = [{'animal_id': 27393, 'session': 1, 'scan_idx': 25},
-                        {'animal_id': 27393, 'session': 1, 'scan_idx': 26},]),
+                        {'animal_id': 27393, 'session': 1, 'scan_idx': 26},
+                        ]),
       dict(stack_keys = [{'animal_id': 27578, 'stack_session': 1, 'stack_idx': 8},
                         {'animal_id': 27578, 'stack_session': 2, 'stack_idx': 2},],
             scan_keys = [{'animal_id': 27578, 'session': 1, 'scan_idx': 5},
                         {'animal_id': 27578, 'session': 1, 'scan_idx': 6},
                         #{'animal_id': 27578, 'session': 1, 'scan_idx': 14},
+                        ]),
+    dict(stack_keys = [{'animal_id': 27816, 'stack_session': 1, 'stack_idx': 12},
+                        {'animal_id': 27816, 'stack_session': 2, 'stack_idx': 2},],
+            scan_keys = [{'animal_id': 27816, 'session': 1, 'scan_idx': 8},
+                        {'animal_id': 27816, 'session': 1, 'scan_idx': 10},
+                        ]),
+    dict(stack_keys = [{'animal_id': 27679, 'stack_session': 1, 'stack_idx': 7},
+                        {'animal_id': 27679, 'stack_session': 2, 'stack_idx': 2},],
+            scan_keys = [{'animal_id': 27679, 'session': 1, 'scan_idx': 5},
+                        {'animal_id': 27679, 'session': 1, 'scan_idx': 10},
                         ])]
 
 for dic in ls:
@@ -25,7 +36,7 @@ for dic in ls:
     stack.Registration().populate(stack_keys, scan_keys, reserve_jobs=True)        
     meso.StackCoordinates.populate(scan_keys, reserve_jobs=True)
 
-    stack.SegmentationTask().fill(stack_keys)
+    stack.SegmentationTask().fill(stack_keys, skip_duplicates=True)
     stack.Segmentation.populate(stack_keys, reserve_jobs=True)
     stack.FieldSegmentation.populate(stack_keys, reserve_jobs=True)
     stack.FieldSegmentation.populate(stack_keys, reserve_jobs=True)
