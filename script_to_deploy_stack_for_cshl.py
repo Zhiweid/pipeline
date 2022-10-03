@@ -36,7 +36,7 @@ for dic in ls:
     stack.Registration().populate(stack_keys, scan_keys, reserve_jobs=True)        
     meso.StackCoordinates.populate(scan_keys, reserve_jobs=True)
 
-    stack.SegmentationTask().fill(stack_keys, skip_duplicates=True)
+    stack.SegmentationTask().fill(stack_keys)
     stack.Segmentation.populate(stack_keys, reserve_jobs=True)
     stack.FieldSegmentation.populate(stack_keys, reserve_jobs=True)
     stack.FieldSegmentation.populate(stack_keys, reserve_jobs=True)
