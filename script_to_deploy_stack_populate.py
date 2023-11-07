@@ -5,7 +5,7 @@ import datajoint as dj
 collection = dj.create_virtual_module('pipeline_collection', 'pipeline_collection')
 
 # keys = (collection.CuratedScan & 'study_name LIKE "%%dei_v1%%" and animal_id in (29513, 29515) and scan_purpose in ("imagenet", "dei_texture_package")').proj(scan_session='session')
-keys = (collection.CuratedScan & 'study_name LIKE "%%dynamic_static_deis_closed_loop%%" and animal_id in (30417) and scan_purpose in ("platinum_with_static_oracle", "static_images_with_dynamic_oracle", "dynamic_static_validation_deis")').proj(scan_session='session')
+keys = (collection.CuratedScan & 'study_name LIKE "%%dynamic_static_deis_closed_loop%%" and animal_id in (30418) and scan_purpose in ("platinum_with_static_oracle", "static_images_with_dynamic_oracle", "dynamic_static_validation_deis")').proj(scan_session='session')
 keys = stack.Registration & keys & 'scan_session = stack_session'
 stack.RegistrationOverTime.populate(keys, reserve_jobs=True, order='random')
 
