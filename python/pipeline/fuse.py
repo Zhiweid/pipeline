@@ -1,7 +1,7 @@
 import sys
 import datajoint as dj
 from distutils.version import StrictVersion
-from . import experiment, reso, meso, shared
+from . import experiment, reso, meso, neuropixel, shared
 from .exceptions import PipelineException
 
 
@@ -13,7 +13,7 @@ class Pipe(dj.Lookup):
     definition = """ # names of fused pipelines
     pipe                : varchar(16)                   # pipeline name
     """
-    contents = [['reso'], ['meso']]
+    contents = [['reso'], ['meso'], ['neuropixel']]
 
 
 class Resolver:
@@ -88,12 +88,13 @@ class ScanSet(Resolver, dj.Computed):
     """
     @property
     def key_source(self):
-        return reso.ScanSet().proj() + meso.ScanSet().proj()
+        return reso.ScanSet().proj() + meso.ScanSet().proj() + neuropixel.ScanSet().proj()
 
     @property
     def mapping(self):
         return {'reso': (reso.ScanSet, ScanSet.Reso),
-                'meso': (meso.ScanSet, ScanSet.Meso)}
+                'meso': (meso.ScanSet, ScanSet.Meso),
+                'neuropixel': (neuropixel.ScanSet, ScanSet.Neuropixel)}
 
     class Unit(dj.Part):
         definition = """ # individual units corresponding to <module>.ScanSet.Unit
@@ -114,6 +115,12 @@ class ScanSet(Resolver, dj.Computed):
     class Meso(dj.Part):
         definition = """
         -> meso.ScanSet
+        -> master
+        """
+        
+    class Neuropixel(dj.Part):
+        definition = """
+        -> neuropixel.ScanSet
         -> master
         """
 
@@ -181,12 +188,14 @@ class ScanDone(Resolver, dj.Computed):
     """
     @property
     def key_source(self):
-        return reso.ScanDone().proj() + meso.ScanDone().proj()
+        return reso.ScanDone().proj() + meso.ScanDone().proj() + neuropixel.ScanDone().proj()
 
     @property
     def mapping(self):
         return {'reso': (reso.ScanDone, ScanDone.Reso),
-                'meso': (meso.ScanDone, ScanDone.Meso)}
+                'meso': (meso.ScanDone, ScanDone.Meso),
+                'neuropixel': (neuropixel.ScanDone, ScanDone.Neuropixel)}
+
 
     class Reso(dj.Part):
         definition = """
@@ -197,5 +206,11 @@ class ScanDone(Resolver, dj.Computed):
     class Meso(dj.Part):
         definition = """
         -> meso.ScanDone
+        -> master
+        """
+        
+    class Neuropixel(dj.Part):
+        definition = """
+        -> neuropixel.ScanDone
         -> master
         """

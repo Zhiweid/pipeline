@@ -13,18 +13,20 @@ services:
     volumes:
       - /mnt/:/mnt/
       - /tmp:/tmp
+      - ../../Dropbox/notebooks/pipeline:/data/notebooks
       - .:/data/pipeline/
       - ../stimuli:/data/stimuli
     env_file: .env
     environment:
       - DISPLAY=unix$DISPLAY
     entrypoint:
-      - jupyter 
-      - lab
-      - --ip=0.0.0.0
-      - --allow-root
-      - --NotebookApp.token=''
-      - --no-browser
+      - /data/pipeline/personal_pkg.sh
+      # - jupyter 
+      # - lab
+      # - --ip=0.0.0.0
+      # - --allow-root
+      # - --NotebookApp.token=''
+      # - --no-browser
 
 
   minion:

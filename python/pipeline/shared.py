@@ -9,29 +9,29 @@ schema = dj.schema('pipeline_shared', locals(), create_tables=False)
 
 @schema
 class Field(dj.Lookup):
-    definition = """ # fields in mesoscope scans
+    definition = """ # fields in mesoscope scans; negative values serve as placeholders for neuropixel recordings
     field       : tinyint
     """
-    contents = [[i] for i in range(1, 25)]
+    contents = [[i] for i in [-1] + list(range(1, 25))]
 
 @schema
 class Channel(dj.Lookup):
-    definition = """  # recording channel, directly related to experiment.PMTFilterSet.Channel
+    definition = """  # recording channel, directly related to experiment.PMTFilterSet.Channel; negative values serve as placeholders for neuropixel recordings
     channel     : tinyint
     """
-    contents = [[i] for i in range(1, 5)]
+    contents = [[i] for i in [-1] + list(range(1, 5))]
 
 @schema
 class PipelineVersion(dj.Lookup):
-    definition = """ # versions for the reso pipeline
+    definition = """ # versions for the reso pipeline; negative values indicate versions for neuropixel pipeline
 
     pipe_version                    : smallint
     """
-    contents = [[i] for i in range(3)]
+    contents = [[i] for i in range(-1, 3)]
 
 @schema
 class SegmentationMethod(dj.Lookup):
-    definition = """ # methods for mask extraction for multi-photon scans
+    definition = """ # methods for mask extraction for multi-photon scans; negative values indicate methods used for neuropixel recordings
     segmentation_method         : tinyint
     ---
     name                        : varchar(16)
@@ -39,6 +39,7 @@ class SegmentationMethod(dj.Lookup):
     language                    : enum('matlab', 'python')  # implementation language
     """
     contents = [
+        [-1, 'neuropixel', 'paramset_idx in neuropixel_ephys.ClusteringParamSet for neuropixel spike sorting', 'python'],
         [1, 'manual', '', 'matlab'],
         [2, 'nmf', 'constrained non-negative matrix factorization from Pnevmatikakis et al. (2016)',
          'python'],
@@ -93,7 +94,7 @@ class MaskType(dj.Lookup):
 
 @schema
 class SpikeMethod(dj.Lookup):
-    definition = """
+    definition = """ # negative values indicate methods for neuropixel recordings
     spike_method        : tinyint                   # spike inference method
     ---
     name                : varchar(16)               # short name to identify the spike inference method
@@ -102,6 +103,7 @@ class SpikeMethod(dj.Lookup):
     """
 
     contents = [
+        [-1, 'neuropixel', 'curation_id in neuropixel_ephys.Curation for curating clustering results', 'python'],
         [2, 'foopsi', 'nonnegative sparse deconvolution from Vogelstein (2010)', 'python'],
         [3, 'stm', 'spike triggered mixture model from Theis et al. (2016)', 'python'],
         [5, 'nmf', 'noise constrained deconvolution from Pnevmatikakis et al. (2016)', 'python'],

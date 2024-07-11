@@ -11,7 +11,6 @@ from .utils import galvo_corrections, signal, quality, mask_classification, perf
 from .exceptions import PipelineException
 
 import logging
-
 logger = logging.getLogger(__name__)
 
 

@@ -800,7 +800,7 @@ class MonitorCalibrationFromH5(dj.Lookup):
                 trial_starts[wrap_idx[i]+1:] = 2**32 + trial_starts[wrap_idx[i]+1:]
 
         if len(trial_starts) != 52: # 52 pixel values (0:255:5)
-            self.insert1(dict(key, scan_on=scan_on, valid=False))
+            self.insert1(dict(moncalib_key, scan_on=scan_on, valid=False))
             return
 
         trial_length = np.diff(trial_starts).mean()
